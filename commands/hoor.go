@@ -3,19 +3,22 @@
 package commands
 
 import (
-	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/spf13/cast"
 	"github.com/spf13/cobra"
 	"github.com/spf13/hugo/helpers"
 	"github.com/spf13/hugo/hugolib"
+	"github.com/spf13/hugo/parser"
 	"github.com/spf13/hugo/source"
 	jww "github.com/spf13/jwalterweatherman"
 	"github.com/spf13/viper"
+	"github.com/yaa110/go-persian-calendar/ptime"
 )
 
 // HoorCmd represents the base command when called without any subcommands.
@@ -28,9 +31,16 @@ var HoorCmd = &cobra.Command{
 			return
 		}
 
+		if sourcePath != "" {
+			dir, _ := filepath.Abs(sourcePath)
+			viper.Set("WorkingDir", dir)
+		}
+
 		if input != "" {
 			// do something
 		}
+		jww.SetLogThreshold(jww.LevelTrace)
+		jww.SetStdoutThreshold(jww.LevelTrace)
 
 		parseAndApply(site)
 	},
@@ -56,6 +66,8 @@ func init() {
 	HoorCmd.Flags().StringVarP(&sourcePath, "source", "s", "", "filesystem path to read files relative from")
 	HoorCmd.Flags().StringVarP(&contentDir, "contentDir", "c", "", "filesystem path to content directory")
 	HoorCmd.Flags().StringVarP(&input, "input", "i", "", "filesystem path of the input files")
+
+	viper.SetDefault("shamsiDateFormat", "dd MM yyyy")
 }
 
 // Setup adds all child commands to the root command and sets flags appropriately.
@@ -63,6 +75,7 @@ func Setup() {
 	// Load configuration options into Viper
 	if err := hugolib.LoadGlobalConfig(sourcePath, cfgFile); err != nil {
 		jww.ERROR.Println("Cannot find configurations file")
+		jww.DEBUG.Println(err)
 		return
 	}
 
@@ -80,6 +93,7 @@ func loadHugoSite() (site *hugolib.Site, err error) {
 
 	if hugoSites, err = hugolib.NewHugoSitesFromConfiguration(); err != nil {
 		jww.ERROR.Println("Invalid configuration file")
+		jww.DEBUG.Println(err)
 		return
 	}
 
@@ -88,6 +102,7 @@ func loadHugoSite() (site *hugolib.Site, err error) {
 
 	if err = site.Initialise(); err != nil {
 		jww.ERROR.Println("Invalid configuration file")
+		jww.DEBUG.Println(err)
 		return
 	}
 
@@ -95,61 +110,148 @@ func loadHugoSite() (site *hugolib.Site, err error) {
 }
 
 func parseAndApply(site *hugolib.Site) {
-	errs := make(chan error)
-
-	files := site.Source.Files()
-
-	if len(files) < 1 {
-		close(errs)
+	sourceFiles := site.Source.Files()
+	if len(sourceFiles) < 1 {
+		jww.ERROR.Println("No file found in this website")
 		return
 	}
 
 	results := make(chan hugolib.HandledResult)
 	filechan := make(chan *source.File)
-
 	procs := getGoMaxProcs()
-	wg := &sync.WaitGroup{}
 
-	wg.Add(procs * 4)
+	// generate concurrent sourceReader and processor
+	srouceReaderWg := &sync.WaitGroup{}
+	srouceReaderWg.Add(procs * 4)
 	for i := 0; i < procs*4; i++ {
-		fmt.Println(i)
-		go sourceReader(site, filechan, results, wg)
+		go sourceReader(site, filechan, results, srouceReaderWg)
 	}
 
-	go process(results)
+	processorWg := &sync.WaitGroup{}
+	processorWg.Add(procs * 4)
+	for i := 0; i < procs*4; i++ {
+		go processor(results, processorWg)
+	}
 
-	for _, file := range files {
+	// pass source files to filechan channel
+	for _, file := range sourceFiles {
 		filechan <- file
 	}
 
 	close(filechan)
-	wg.Wait()
+	srouceReaderWg.Wait()
 	close(results)
+	processorWg.Wait()
 }
 
-func sourceReader(s *hugolib.Site, files <-chan *source.File, results chan<- hugolib.HandledResult, wg *sync.WaitGroup) {
+// sourceReader receives and processes items received from filechan in concurrent.
+func sourceReader(site *hugolib.Site, files <-chan *source.File, results chan<- hugolib.HandledResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for file := range files {
-		readSourceFile(s, file, results)
+		readSourceFile(site, file, results)
 	}
 }
 
-func readSourceFile(s *hugolib.Site, file *source.File, results chan<- hugolib.HandledResult) {
-	h := hugolib.NewMetaHandler(file.Extension())
-	if h != nil {
-		h.Read(file, s, results)
-	} else {
-		log.Println("Unsupported File Type", file.Path())
+// readSourceFile reads and processes each file, determines it type and publish
+// the result to results channel.
+func readSourceFile(site *hugolib.Site, file *source.File, results chan<- hugolib.HandledResult) {
+	if handler := hugolib.NewMetaHandler(file.Extension()); handler != nil {
+		handler.Read(file, site, results)
+		return
 	}
+
+	jww.WARN.Println("Unsupported file type", file.Path())
 }
 
-func process(results <-chan hugolib.HandledResult) {
+func processor(results <-chan hugolib.HandledResult, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for r := range results {
-		p := r.Page()
-		if p != nil {
-			fmt.Println(filepath.Join(helpers.AbsPathify(viper.GetString("contentDir")+"/"), p.FullFilePath()))
+		process(r)
+	}
+}
+
+func process(r hugolib.HandledResult) {
+	p := r.Page()
+	if p != nil {
+		filePath := filepath.Join(helpers.AbsPathify(viper.GetString("contentDir")+"/"), p.FullFilePath())
+		parseAndProcess(filePath, p)
+	}
+}
+
+func parseAndProcess(filePath string, page *hugolib.Page) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		jww.ERROR.Println("Unable to open file", filePath)
+		jww.DEBUG.Println(err)
+		return
+	}
+
+	parsedPage, err := parser.ReadFrom(file)
+	if err != nil {
+		jww.ERROR.Println("Unable to parse file", filePath)
+		jww.DEBUG.Println(err)
+		return
+	}
+
+	metadata, err := parsedPage.Metadata()
+	if err != nil {
+		jww.ERROR.Println("Unable to extract metadata from", filePath)
+		jww.DEBUG.Println(err)
+		return
+	}
+
+	metadataItems := cast.ToStringMap(metadata)
+	frontMatter := parsedPage.FrontMatter()
+
+	page, err = hugolib.NewPage("pagename")
+	if err != nil {
+		jww.ERROR.Println("Unable to initialize page", filePath)
+		jww.DEBUG.Println(err)
+		return
+	}
+
+	if date, found := metadataItems["date"]; found {
+		parseDate, err := time.Parse(time.RFC3339, date.(string))
+		if err != nil {
+			jww.ERROR.Println("Invalid input date format", filePath)
+			jww.DEBUG.Println(err)
+			return
+		}
+
+		shamsiDateFormat := viper.GetString("shamsiDateFormat")
+		shamsiDate := ptime.New(parseDate)
+		metadataItems["shamsiDateF"] = persianizeNumbers(shamsiDate.Format(shamsiDateFormat))
+
+		page.SetSourceContent(parsedPage.Content())
+		err = page.SetSourceMetaData(metadataItems, rune(frontMatter[0]))
+		if err != nil {
+			jww.ERROR.Println("Unable to insert metadata", filePath)
+			jww.DEBUG.Println(err)
+			return
+		}
+
+		err = page.SaveSourceAs(filePath)
+		if err != nil {
+			jww.ERROR.Println("Unable to save file", filePath)
+			jww.DEBUG.Println(err)
 		}
 	}
+}
+
+// persianizeNumbers converts English number characters to Persian number characters
+func persianizeNumbers(input string) string {
+	r := strings.NewReplacer("0", "۰",
+		"1", "۱",
+		"2", "۲",
+		"3", "۳",
+		"4", "۴",
+		"5", "۵",
+		"6", "۶",
+		"7", "۷",
+		"8", "۸",
+		"9", "۹")
+
+	return r.Replace(input)
 }
 
 // getGoMaxProcs returns the number of threads that the application is allowed to
