@@ -25,24 +25,32 @@ import (
 var HoorCmd = &cobra.Command{
 	Use:   "hoor",
 	Short: "Add Shamsi date to Hugo based websites with ease",
+	PreRun: func(cmd *cobra.Command, args []string) {
+		startTime = time.Now()
+
+		if err := defineWorkingDir(); err != nil {
+			return
+		}
+
+		if debugMode {
+			jww.SetStdoutThreshold(jww.LevelTrace)
+		}
+
+		// set default persian date format
+		viper.SetDefault("shamsiDateFormat", "dd MM yyyy")
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		site, err := loadHugoSite()
 		if err != nil {
 			return
 		}
 
-		if sourcePath != "" {
-			dir, _ := filepath.Abs(sourcePath)
-			viper.Set("WorkingDir", dir)
-		}
-
 		if input != "" {
-			// do something
+			applyToFile(input)
+			return
 		}
-		jww.SetLogThreshold(jww.LevelTrace)
-		jww.SetStdoutThreshold(jww.LevelTrace)
 
-		parseAndApply(site)
+		applyToSite(site)
 	},
 }
 
@@ -52,23 +60,45 @@ var (
 	sourcePath string
 	contentDir string
 	input      string
+	debugMode  bool
+	startTime  time.Time
 )
 
 // init initilizes required flags for Hoor.
 func init() {
-	// Persistent flags
+	HoorCmd.Flags().BoolVar(&debugMode, "debug", false, "runs the application in debug mode")
 	HoorCmd.Flags().StringVar(&cfgFile, "config", "", "config file (default is path/config.yaml|json|toml)")
 
 	validConfigFilenames := []string{"json", "js", "yaml", "yml", "toml", "tml"}
 	HoorCmd.Flags().SetAnnotation("config", cobra.BashCompFilenameExt, validConfigFilenames)
 
-	// Common flags
 	HoorCmd.Flags().StringVarP(&sourcePath, "source", "s", "", "filesystem path to read files relative from")
 	HoorCmd.Flags().StringVarP(&contentDir, "contentDir", "c", "", "filesystem path to content directory")
 	HoorCmd.Flags().StringVarP(&input, "input", "i", "", "filesystem path of the input files")
+}
 
-	// set default persian date format
-	viper.SetDefault("shamsiDateFormat", "dd MM yyyy")
+// defineWorkingDir sets working directory variable, it uses source flag value in
+// case of existence. Otherwise, it gets working dir from standard library.
+func defineWorkingDir() error {
+	var (
+		dir string
+		err error
+	)
+
+	if sourcePath != "" {
+		if dir, err = filepath.Abs(sourcePath); err != nil {
+			jww.ERROR.Println("Unable to parse source flag")
+			return err
+		}
+	} else {
+		if dir, err = os.Getwd(); err != nil {
+			jww.ERROR.Println("Unable to gather working directory")
+			return err
+		}
+	}
+
+	viper.Set("WorkingDir", dir)
+	return nil
 }
 
 // Setup adds all child commands to the root command and sets flags appropriately.
@@ -110,7 +140,16 @@ func loadHugoSite() (site *hugolib.Site, err error) {
 	return
 }
 
-func parseAndApply(site *hugolib.Site) {
+// applyToFile generates absolute path of input file and passes it to the file processor.
+func applyToFile(input string) {
+	inputFile := helpers.AbsPathify(input)
+	process(inputFile)
+}
+
+// applyToSite walks through Hugo site and passes each file to the file processor.
+func applyToSite(site *hugolib.Site) {
+	jww.FEEDBACK.Println("Started applying Shamsi date")
+
 	sourceFiles := site.Source.Files()
 	if len(sourceFiles) < 1 {
 		jww.ERROR.Println("No file found in this website")
@@ -128,10 +167,10 @@ func parseAndApply(site *hugolib.Site) {
 		go sourceReader(site, filechan, results, srouceReaderWg)
 	}
 
-	processorWg := &sync.WaitGroup{}
-	processorWg.Add(procs * 4)
+	resultHandlerWg := &sync.WaitGroup{}
+	resultHandlerWg.Add(procs * 4)
 	for i := 0; i < procs*4; i++ {
-		go processor(results, processorWg)
+		go resultHandler(results, resultHandlerWg)
 	}
 
 	// pass source files to filechan channel
@@ -142,7 +181,9 @@ func parseAndApply(site *hugolib.Site) {
 	close(filechan)
 	srouceReaderWg.Wait()
 	close(results)
-	processorWg.Wait()
+	resultHandlerWg.Wait()
+
+	jww.FEEDBACK.Printf("Completed in %v ms\n", int(1000*time.Since(startTime).Seconds()))
 }
 
 // sourceReader receives and processes items received from filechan in concurrent.
@@ -164,22 +205,27 @@ func readSourceFile(site *hugolib.Site, file *source.File, results chan<- hugoli
 	jww.WARN.Println("Unsupported file type", file.Path())
 }
 
-func processor(results <-chan hugolib.HandledResult, wg *sync.WaitGroup) {
+// resultHandler waits for the results from the sourceReader and passes them to
+// handle result for validation and process.
+func resultHandler(results <-chan hugolib.HandledResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for r := range results {
-		process(r)
+		handleResult(r)
 	}
 }
 
-func process(r hugolib.HandledResult) {
+// handleResult checks passed result and send it to file processor for process
+// if the result is a page.
+func handleResult(r hugolib.HandledResult) {
 	p := r.Page()
 	if p != nil {
 		filePath := filepath.Join(helpers.AbsPathify(viper.GetString("contentDir")+"/"), p.FullFilePath())
-		parseAndProcess(filePath, p)
+		process(filePath)
 	}
 }
 
-func parseAndProcess(filePath string, page *hugolib.Page) {
+// process receives a filepath, parses it and add ShamsiDate to it.
+func process(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		jww.ERROR.Println("Unable to open file", filePath)
@@ -204,7 +250,7 @@ func parseAndProcess(filePath string, page *hugolib.Page) {
 	metadataItems := cast.ToStringMap(metadata)
 	frontMatter := parsedPage.FrontMatter()
 
-	page, err = hugolib.NewPage("pagename")
+	page, err := hugolib.NewPage("pagename")
 	if err != nil {
 		jww.ERROR.Println("Unable to initialize page", filePath)
 		jww.DEBUG.Println(err)
