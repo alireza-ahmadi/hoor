@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// versionCmd returns the current application version.
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information of the Hoor",
