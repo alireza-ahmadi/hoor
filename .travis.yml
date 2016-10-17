@@ -17,5 +17,5 @@ script:
   - go test -v ./...
 
 after_success:
-  - gox -output "dist/{{.OS}}_{{.Arch}}_{{.Dir}}"
+  - gox -os "linux windows darwin" -output "dist/{{.OS}}_{{.Arch}}_{{.Dir}}"
   - ghr --username alireza-ahmadi --token $GITHUB_TOKEN `git tag | tail -1` dist/
