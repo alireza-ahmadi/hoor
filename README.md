@@ -1,4 +1,6 @@
-# Hoor [![godoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://godoc.org/github.com/alireza-ahmadi/hoor)
+# Hoor
+
+[![godoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://godoc.org/github.com/alireza-ahmadi/hoor)  [![Build Status](https://travis-ci.org/alireza-ahmadi/hoor.svg?branch=master)](https://travis-ci.org/alireza-ahmadi/hoor)
 
 > Hoor is the Persian word for sun.
 
