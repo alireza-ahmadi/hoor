@@ -18,4 +18,4 @@ script:
 
 after_success:
   - gox -osarch "darwin/amd64 linux/386 linux/amd64 windows/386 windows/amd64" -output "dist/{{.OS}}_{{.Arch}}_{{.Dir}}"
-  - ghr --username alireza-ahmadi --token $GITHUB_TOKEN `git tag | tail -1` dist/
+  - ghr --username alireza-ahmadi --token $GITHUB_TOKEN --replace --prerelease --debug pre-release dist/
