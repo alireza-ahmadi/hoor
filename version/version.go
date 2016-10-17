@@ -2,4 +2,4 @@
 package version
 
 // Version indicates which version of Hoor is running
-const Version = "0.1.0"
+const Version = "0.1.1"
