@@ -1,0 +1,19 @@
+language: go
+
+go:
+  - 1.7
+
+branches:
+  only: master
+
+before_install:
+  - go get -v github.com/mitchellh/gox
+  - gox -build-toolchain
+  - go get -v github.com/tcnksm/ghr
+
+script:
+  - go test -v ./...
+
+after_success:
+  - gox -output "dist/{{.OS}}_{{.Arch}}_{{.Dir}}"
+  - ghr --username alireza-ahmadi --token $GITHUB_TOKEN `git tag | tail -1` dist/
