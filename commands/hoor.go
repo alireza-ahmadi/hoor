@@ -118,7 +118,7 @@ func Setup() {
 	}
 }
 
-// loadHugoSite loads hugo website configuration and initializes hugo site instance
+// loadHugoSite loads hugo website configuration and initializes hugo site instance.
 func loadHugoSite() (site *hugolib.Site, err error) {
 	var hugoSites *hugolib.HugoSites
 
