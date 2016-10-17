@@ -67,6 +67,7 @@ func init() {
 	HoorCmd.Flags().StringVarP(&contentDir, "contentDir", "c", "", "filesystem path to content directory")
 	HoorCmd.Flags().StringVarP(&input, "input", "i", "", "filesystem path of the input files")
 
+	// set default persian date format
 	viper.SetDefault("shamsiDateFormat", "dd MM yyyy")
 }
 
@@ -211,15 +212,18 @@ func parseAndProcess(filePath string, page *hugolib.Page) {
 	}
 
 	if date, found := metadataItems["date"]; found {
-		parseDate, err := time.Parse(time.RFC3339, date.(string))
-		if err != nil {
-			jww.ERROR.Println("Invalid input date format", filePath)
-			jww.DEBUG.Println(err)
-			return
+		var parsedDate time.Time
+
+		if parsedDate, err = time.Parse(time.RFC3339, date.(string)); err != nil {
+			if parsedDate, err = time.Parse("2006-01-02", date.(string)); err != nil {
+				jww.ERROR.Println("Invalid input date format", filePath)
+				jww.DEBUG.Println(err)
+				return
+			}
 		}
 
 		shamsiDateFormat := viper.GetString("shamsiDateFormat")
-		shamsiDate := ptime.New(parseDate)
+		shamsiDate := ptime.New(parsedDate)
 		metadataItems["shamsiDateF"] = persianizeNumbers(shamsiDate.Format(shamsiDateFormat))
 
 		page.SetSourceContent(parsedPage.Content())
