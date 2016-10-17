@@ -15,7 +15,6 @@ var HoorCmd = &cobra.Command{
 	Use:   "hoor",
 	Short: "Add Shamsi date to Hugo based websites with ease",
 	Run: func(cmd *cobra.Command, args []string) {
-		jww.INFO.Println("Hello")
 	},
 }
 
@@ -24,19 +23,21 @@ var (
 	cfgFile    string
 	source     string
 	contentDir string
+	input      string
 )
 
 // init initilizes required flags for Hoor.
 func init() {
 	// Persistent flags
-	HoorCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is path/config.yaml|json|toml)")
+	HoorCmd.Flags().StringVar(&cfgFile, "config", "", "config file (default is path/config.yaml|json|toml)")
 
 	validConfigFilenames := []string{"json", "js", "yaml", "yml", "toml", "tml"}
-	HoorCmd.PersistentFlags().SetAnnotation("config", cobra.BashCompFilenameExt, validConfigFilenames)
+	HoorCmd.Flags().SetAnnotation("config", cobra.BashCompFilenameExt, validConfigFilenames)
 
 	// Common flags
 	HoorCmd.Flags().StringVarP(&source, "source", "s", "", "filesystem path to read files relative from")
 	HoorCmd.Flags().StringVarP(&contentDir, "contentDir", "c", "", "filesystem path to content directory")
+	HoorCmd.Flags().StringVarP(&input, "input", "i", "", "filesystem path of the input files")
 }
 
 // Setup adds all child commands to the root command and sets flags appropriately.
@@ -53,4 +54,23 @@ func Setup() {
 		jww.ERROR.Println(err)
 		os.Exit(-1)
 	}
+}
+
+func loadHugoSite() error {
+	hugoSites, err := hugolib.NewHugoSitesFromConfiguration()
+	if err != nil {
+		jww.ERROR.Println("Invalid configuration file")
+		return err
+	}
+
+	// TODO: improve the application to support multi-site installations
+	site := hugoSites.Sites[0]
+
+	err = site.Initialise()
+	if err != nil {
+		jww.ERROR.Println("Invalid configuration file")
+		return err
+	}
+
+	return nil
 }
