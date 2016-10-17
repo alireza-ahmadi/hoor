@@ -25,21 +25,24 @@ import (
 var HoorCmd = &cobra.Command{
 	Use:   "hoor",
 	Short: "Add Shamsi date to Hugo based websites with ease",
-	PreRun: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, args []string) {
 		startTime = time.Now()
-
-		if err := defineWorkingDir(); err != nil {
-			return
-		}
 
 		if debugMode {
 			jww.SetStdoutThreshold(jww.LevelTrace)
 		}
 
-		// set default persian date format
-		viper.SetDefault("shamsiDateFormat", "dd MM yyyy")
-	},
-	Run: func(cmd *cobra.Command, args []string) {
+		if err := defineWorkingDir(); err != nil {
+			return
+		}
+
+		// Load configuration options into Viper
+		if err := hugolib.LoadGlobalConfig(sourcePath, cfgFile); err != nil {
+			jww.ERROR.Println("Cannot find configurations file")
+			jww.DEBUG.Println(err)
+			return
+		}
+
 		site, err := loadHugoSite()
 		if err != nil {
 			return
@@ -75,6 +78,9 @@ func init() {
 	HoorCmd.Flags().StringVarP(&sourcePath, "source", "s", "", "filesystem path to read files relative from")
 	HoorCmd.Flags().StringVarP(&contentDir, "contentDir", "c", "", "filesystem path to content directory")
 	HoorCmd.Flags().StringVarP(&input, "input", "i", "", "filesystem path of the input files")
+
+	// set default variables
+	viper.SetDefault("shamsiDateFormat", "d M yyyy")
 }
 
 // defineWorkingDir sets working directory variable, it uses source flag value in
@@ -103,13 +109,6 @@ func defineWorkingDir() error {
 
 // Setup adds all child commands to the root command and sets flags appropriately.
 func Setup() {
-	// Load configuration options into Viper
-	if err := hugolib.LoadGlobalConfig(sourcePath, cfgFile); err != nil {
-		jww.ERROR.Println("Cannot find configurations file")
-		jww.DEBUG.Println(err)
-		return
-	}
-
 	HoorCmd.AddCommand(versionCmd)
 
 	if err := HoorCmd.Execute(); err != nil {
@@ -142,8 +141,12 @@ func loadHugoSite() (site *hugolib.Site, err error) {
 
 // applyToFile generates absolute path of input file and passes it to the file processor.
 func applyToFile(input string) {
-	inputFile := helpers.AbsPathify(input)
+	jww.FEEDBACK.Println("Started applying Shamsi date")
+
+	inputFile := helpers.AbsPathify(filepath.Join(viper.GetString("contentDir"), input))
 	process(inputFile)
+
+	jww.FEEDBACK.Printf("Completed in %v ms\n", int(1000*time.Since(startTime).Seconds()))
 }
 
 // applyToSite walks through Hugo site and passes each file to the file processor.
@@ -219,7 +222,7 @@ func resultHandler(results <-chan hugolib.HandledResult, wg *sync.WaitGroup) {
 func handleResult(r hugolib.HandledResult) {
 	p := r.Page()
 	if p != nil {
-		filePath := filepath.Join(helpers.AbsPathify(viper.GetString("contentDir")+"/"), p.FullFilePath())
+		filePath := helpers.AbsPathify(filepath.Join(viper.GetString("contentDir"), p.FullFilePath()))
 		process(filePath)
 	}
 }
@@ -270,7 +273,7 @@ func process(filePath string) {
 
 		shamsiDateFormat := viper.GetString("shamsiDateFormat")
 		shamsiDate := ptime.New(parsedDate)
-		metadataItems["shamsiDateF"] = persianizeNumbers(shamsiDate.Format(shamsiDateFormat))
+		metadataItems["shamsiDate"] = persianizeNumbers(shamsiDate.Format(shamsiDateFormat))
 
 		page.SetSourceContent(parsedPage.Content())
 		err = page.SetSourceMetaData(metadataItems, rune(frontMatter[0]))
