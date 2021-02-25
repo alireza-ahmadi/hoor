@@ -13,7 +13,7 @@ You can download the latest version of **Hoor** from [Releases](https://github.c
 page. Also, if you already installed Golang toolchain, you can install hoor by running
 the following command:
 
-    go get github/alireza-ahamdi/hoor
+    go get -v github.com/alireza-ahmadi/hoor
 
 ## Usage
 
